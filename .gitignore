@@ -219,6 +219,8 @@ __marimo__/
 
 # Environment variables — never commit these
 .env
+backend/.env
+**/.env
 
 # Python
 __pycache__/
