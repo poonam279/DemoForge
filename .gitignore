@@ -216,3 +216,29 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Environment variables — never commit these
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# Uploaded and generated files — can be large
+uploads/
+outputs/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+backend.log
