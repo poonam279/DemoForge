@@ -495,9 +495,9 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path,
 
     cmd = [
         "ffmpeg",
-        "-itsscale", f"{speed_factor}",
         "-i", video_path,
         "-i", stitched_audio,
+        "-vf", f"setpts={speed_factor}*PTS,fps=30",
         "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-shortest",
@@ -505,7 +505,7 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        app.logger.error(f"Synced video ffmpeg error: {result.stderr[-500:]}")
+        app.logger.error(f"Synced video ffmpeg error: {result.stderr[-2000:]}")
         raise Exception("Failed to assemble synced video.")
     return output_path
 
@@ -689,7 +689,7 @@ def merge_audio_with_video(video_path, audio_path, output_path,
     cmd += ["-c:a", "aac", "-shortest", output_path, "-y"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Merge ffmpeg error: {result.stderr[-500:]}")
+        app.logger.error(f"Merge ffmpeg error: {result.stderr[-2000:]}")
         raise Exception("Failed to merge video and audio.")
     return output_path
 
