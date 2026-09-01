@@ -2,6 +2,13 @@ import { useState, useRef, useCallback } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
+async function safeJson(res) {
+  const text = await res.text();
+  if (!text) throw new Error("Server returned an empty response — request may have timed out");
+  try { return JSON.parse(text); }
+  catch { throw new Error(`Server error: ${text.slice(0, 200)}`); }
+}
+
 const TONES = [
   { value: "professional", label: "Professional", desc: "SaaS product demo style" },
   { value: "friendly", label: "Friendly", desc: "Warm & conversational" },
@@ -183,7 +190,7 @@ export default function App() {
 
     try {
       const res = await fetch(`${API_BASE}/api/generate-script`, { method: "POST", body: formData });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Something went wrong");
       setJobId(data.job_id);
       setScript(data.script);
@@ -237,7 +244,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Something went wrong");
       setResult(data);
       setSegments(data.segments || []);
@@ -321,7 +328,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ job_id: result.job_id, script: result._editedScript }),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Regeneration failed");
       setResult((prev) => ({ ...prev, ...data, script: prev._editedScript, _editing: false }));
       if (data.segments) setSegments(data.segments);
@@ -341,7 +348,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ job_id: result.job_id, segment_index: segmentIndex, new_text: newText }),
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.error || "Segment regeneration failed");
       setSegments(data.segments);
       setResult((prev) => ({
