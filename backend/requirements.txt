@@ -5,4 +5,5 @@ openai>=1.55.0
 requests==2.31.0
 werkzeug==3.0.1
 python-dotenv==1.0.0
+gunicorn==22.0.0
 

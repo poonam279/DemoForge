@@ -16,12 +16,20 @@ import uuid
 import time
 import re
 import shutil
+import pathlib
 
-app = Flask(__name__)
+_base_dir = pathlib.Path(__file__).resolve().parent.parent
+_frontend_dist = _base_dir / "frontend" / "dist"
+
+app = Flask(
+    __name__,
+    static_folder=str(_frontend_dist / "assets"),
+    static_url_path="/assets",
+)
 CORS(app)
 
-UPLOAD_FOLDER = "../uploads"
-OUTPUT_FOLDER = "../outputs"
+UPLOAD_FOLDER = str(_base_dir / "uploads")
+OUTPUT_FOLDER = str(_base_dir / "outputs")
 ALLOWED_EXTENSIONS = {"mp4", "mov", "webm", "avi"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -1216,7 +1224,18 @@ def health():
     return jsonify({"status": "ok", "tts_provider": TTS_PROVIDER or "not yet resolved"})
 
 
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path):
+    file_path = _frontend_dist / path
+    if path and file_path.is_file():
+        return send_from_directory(str(_frontend_dist), path)
+    return send_from_directory(str(_frontend_dist), "index.html")
+
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
 if __name__ == "__main__":
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    app.run(debug=True, port=5001)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(debug=True, host="0.0.0.0", port=port)

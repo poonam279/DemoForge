@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 
-const API_BASE = "http://localhost:5001";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 const TONES = [
   { value: "professional", label: "Professional", desc: "SaaS product demo style" },
