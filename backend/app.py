@@ -495,9 +495,9 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path,
 
     cmd = [
         "ffmpeg",
+        "-itsscale", f"{speed_factor}",
         "-i", video_path,
         "-i", stitched_audio,
-        "-vf", f"setpts={speed_factor}*PTS",
         "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-shortest",
