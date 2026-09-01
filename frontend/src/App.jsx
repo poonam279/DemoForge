@@ -8,6 +8,15 @@ const TONES = [
   { value: "energetic", label: "Energetic", desc: "Startup pitch energy" },
 ];
 
+const MODES = [
+  { value: 200, label: "Quick Demo", desc: "~90s · Social reels" },
+  { value: 600, label: "Standard", desc: "~4min · Walkthroughs" },
+  { value: 1200, label: "Deep Dive", desc: "~8min · Training" },
+];
+
+const splitToSegments = (text) =>
+  text.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+
 
 function UploadIcon() {
   return (
@@ -106,18 +115,26 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [productName, setProductName] = useState("");
   const [tone, setTone] = useState("professional");
-  const [generateShort, setGenerateShort] = useState(true);
-  const [highlightMode, setHighlightMode] = useState("auto"); // "auto" | "manual"
+  const [wordLimit, setWordLimit] = useState(200);
+  const [generateShort, setGenerateShort] = useState(false); // disabled for now — set to true and uncomment UI to re-enable social clips
+  const [highlightMode, setHighlightMode] = useState("auto");
   const [manualStart, setManualStart] = useState("");
   const [manualEnd, setManualEnd] = useState("");
-  const [loading, setLoading] = useState(false);
+
+  // Two-phase state: idle | generatingScript | scriptReady | generatingVideo | result
+  const [phase, setPhase] = useState("idle");
   const [step, setStep] = useState("");
+  const [jobId, setJobId] = useState(null);
+  const [script, setScript] = useState("");
+  const [scriptMeta, setScriptMeta] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [editingScript, setEditingScript] = useState(false);
-  const [editedScript, setEditedScript] = useState("");
   const [regenerating, setRegenerating] = useState(false);
+  const [segments, setSegments] = useState([]);
+  const [editingSegment, setEditingSegment] = useState(null);
+  const [editingSegmentText, setEditingSegmentText] = useState("");
+  const [regeneratingSegment, setRegeneratingSegment] = useState(null);
   const fileInputRef = useRef();
 
   const handleDrop = useCallback((e) => {
@@ -127,67 +144,173 @@ export default function App() {
     if (dropped) setFile(dropped);
   }, []);
 
-  const steps = [
+  const scriptSteps = [
     "Extracting frames from your screencast...",
     "Analysing screen content with Claude...",
     "Writing voiceover script...",
-    "Generating audio...",
+  ];
+
+  const videoSteps = [
+    "Generating voiceover audio...",
     "Detecting interactions & scene changes...",
     "Applying video enhancements...",
     "Creating full demo video...",
     generateShort ? "Cutting social short clip..." : null,
   ].filter(Boolean);
 
-  const handleSubmit = async () => {
+  const handleGenerateScript = async () => {
     if (!file) return;
-    setLoading(true);
+    setPhase("generatingScript");
     setError(null);
     setResult(null);
+    setJobId(null);
+    setScript("");
 
     const formData = new FormData();
     formData.append("video", file);
     formData.append("product_name", productName);
     formData.append("tone", tone);
-    formData.append("generate_short", generateShort.toString());
-    if (generateShort && highlightMode === "manual" && manualStart && manualEnd) {
-      formData.append("manual_start", manualStart);
-      formData.append("manual_end", manualEnd);
-    }
+    formData.append("word_limit", wordLimit.toString());
 
     let stepIdx = 0;
+    setStep(scriptSteps[0]);
     const stepInterval = setInterval(() => {
-      if (stepIdx < steps.length - 1) {
+      if (stepIdx < scriptSteps.length - 1) {
         stepIdx++;
-        setStep(steps[stepIdx]);
+        setStep(scriptSteps[stepIdx]);
       }
     }, 3500);
 
-    setStep(steps[0]);
-
     try {
-      const res = await fetch(`${API_BASE}/api/process`, { method: "POST", body: formData });
+      const res = await fetch(`${API_BASE}/api/generate-script`, { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Something went wrong");
-      setResult(data);
+      setJobId(data.job_id);
+      setScript(data.script);
+      if (data.segments && data.segments.length > 0) {
+        setSegments(data.segments);
+      } else {
+        setSegments(splitToSegments(data.script).map((text, i) => ({ index: i, text })));
+      }
+      setScriptMeta({ frame_count: data.frame_count, duration: data.duration });
+      setPhase("scriptReady");
     } catch (err) {
       setError(err.message);
+      setPhase("idle");
     } finally {
       clearInterval(stepInterval);
-      setLoading(false);
       setStep("");
     }
   };
 
+  const handleConfirmAndGenerate = async () => {
+    const finalScript = segments.length > 0
+      ? segments.map((s) => s.text).join(" ")
+      : script;
+    if (!jobId || !finalScript) return;
+    setPhase("generatingVideo");
+    setError(null);
+
+    const body = {
+      job_id: jobId,
+      script: finalScript,
+      segments: segments,
+      generate_short: generateShort,
+    };
+    if (generateShort && highlightMode === "manual" && manualStart && manualEnd) {
+      body.manual_start = manualStart;
+      body.manual_end = manualEnd;
+    }
+
+    let stepIdx = 0;
+    setStep(videoSteps[0]);
+    const stepInterval = setInterval(() => {
+      if (stepIdx < videoSteps.length - 1) {
+        stepIdx++;
+        setStep(videoSteps[stepIdx]);
+      }
+    }, 3500);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Something went wrong");
+      setResult(data);
+      setSegments(data.segments || []);
+      setPhase("result");
+    } catch (err) {
+      setError(err.message);
+      setPhase("scriptReady");
+    } finally {
+      clearInterval(stepInterval);
+      setStep("");
+    }
+  };
+
+  const handleCancel = () => {
+    setPhase("idle");
+    setJobId(null);
+    setScript("");
+    setScriptMeta(null);
+    setError(null);
+    setSegments([]);
+    setEditingSegment(null);
+    setRegeneratingSegment(null);
+  };
+
   const copyScript = () => {
-    navigator.clipboard.writeText(editingScript ? editedScript : result.script);
+    const text = phase === "result"
+      ? result.script
+      : segments.length > 0
+        ? segments.map((s) => s.text).join(" ")
+        : script;
+    navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const startEditing = () => {
-    setEditedScript(result.script);
-    setEditingScript(true);
+  const totalWordCount = () => {
+    const text = segments.length > 0
+      ? segments.map((s) => s.text).join(" ")
+      : script;
+    return wordCount(text);
   };
+
+  const updateSegmentText = (index, newText) => {
+    setSegments((prev) => prev.map((s) => s.index === index ? { ...s, text: newText } : s));
+  };
+
+  const deleteSegment = (index) => {
+    setSegments((prev) => {
+      const filtered = prev.filter((s) => s.index !== index);
+      const deletedSeg = prev.find((s) => s.index === index);
+      return filtered.map((s, i) => {
+        const updated = { ...s, index: i };
+        if (deletedSeg && deletedSeg.frame_end && i === Math.max(0, index - 1)) {
+          updated.frame_end = Math.max(s.frame_end || 0, deletedSeg.frame_end);
+        }
+        return updated;
+      });
+    });
+  };
+
+  const addSegment = () => {
+    const lastSeg = segments[segments.length - 1];
+    const newSeg = { index: segments.length, text: "" };
+    if (lastSeg && lastSeg.frame_end) {
+      newSeg.frame_start = lastSeg.frame_end;
+      newSeg.frame_end = lastSeg.frame_end;
+    }
+    setSegments((prev) => [...prev, newSeg]);
+    setEditingSegment(segments.length);
+    setEditingSegmentText("");
+  };
+
+  const wordCount = (text) => text.trim().split(/\s+/).filter(Boolean).length;
 
   const regenerateWithEdit = async () => {
     setRegenerating(true);
@@ -196,16 +319,42 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/regenerate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_id: result.job_id, script: editedScript }),
+        body: JSON.stringify({ job_id: result.job_id, script: result._editedScript }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Regeneration failed");
-      setResult((prev) => ({ ...prev, ...data, script: editedScript }));
-      setEditingScript(false);
+      setResult((prev) => ({ ...prev, ...data, script: prev._editedScript, _editing: false }));
+      if (data.segments) setSegments(data.segments);
     } catch (err) {
       setError(err.message);
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  const regenerateSegment = async (segmentIndex, newText) => {
+    setRegeneratingSegment(segmentIndex);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/regenerate-segment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: result.job_id, segment_index: segmentIndex, new_text: newText }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Segment regeneration failed");
+      setSegments(data.segments);
+      setResult((prev) => ({
+        ...prev,
+        full_video_url: data.full_video_url,
+        audio_url: data.audio_url,
+        script: data.segments.map((s) => s.text).join(" "),
+      }));
+      setEditingSegment(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRegeneratingSegment(null);
     }
   };
 
@@ -232,7 +381,7 @@ export default function App() {
         </div>
         <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 20, letterSpacing: "-0.02em" }}>DemoForge</span>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "#ffffff40", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-          Screencast → Demo + Social Clip
+          Screencast → Narrated Demo
         </span>
       </div>
 
@@ -241,85 +390,280 @@ export default function App() {
         {/* Hero */}
         <div style={{ marginBottom: 56, animation: "fadeUp 0.5s ease both" }}>
           <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: "clamp(36px, 5vw, 52px)", fontWeight: 400, lineHeight: 1.1, letterSpacing: "-0.03em", marginBottom: 16 }}>
-            Raw screencast in.<br />
-            <em style={{ color: "#ff6b35" }}>Narrated video + social clip out.</em>
+          
+            <em style={{ color: "#ff6b35" }}>  Raw screencast in.<br /> narrated demo video out.</em>
           </h1>
           <p style={{ color: "#ffffff60", fontSize: 17, lineHeight: 1.6, maxWidth: 720 }}>
-            Upload any screencast — DemoForge writes the script, generates the voiceover, and produces a full narrated video <em>and</em> a social-ready short. No editing. No account. Bring your own keys.
+            Upload any screencast — DemoForge writes the script, generates the voiceover, and produces a full narrated demo video. No editing. No account. Bring your own keys.
           </p>
         </div>
 
-        {/* Form */}
-        <div style={{ animation: "fadeUp 0.5s 0.1s ease both", opacity: 0, animationFillMode: "forwards" }}>
+        {/* Phase 1: Form */}
+        {(phase === "idle" || phase === "generatingScript") && (
+          <div style={{ animation: "fadeUp 0.5s 0.1s ease both", opacity: 0, animationFillMode: "forwards" }}>
 
-          {/* Upload */}
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            style={{
-              border: `1.5px dashed ${dragOver ? "#ff6b35" : file ? "#ff6b3560" : "#ffffff18"}`,
-              borderRadius: 16, padding: "48px 24px", textAlign: "center", cursor: "pointer",
-              background: dragOver ? "#ff6b350a" : file ? "#ff6b350a" : "#ffffff04",
-              transition: "all 0.2s ease", marginBottom: 28,
-            }}
-          >
-            <input ref={fileInputRef} type="file" accept=".mp4,.mov,.webm,.avi" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
-            {file ? (
-              <div>
-                <div style={{ width: 48, height: 48, background: "#ff6b3520", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", color: "#ff6b35" }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <rect x="2" y="2" width="20" height="20" rx="4"/>
-                    <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
-                  </svg>
+            {/* Upload */}
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDrop={handleDrop}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              style={{
+                border: `1.5px dashed ${dragOver ? "#ff6b35" : file ? "#ff6b3560" : "#ffffff18"}`,
+                borderRadius: 16, padding: "48px 24px", textAlign: "center", cursor: "pointer",
+                background: dragOver ? "#ff6b350a" : file ? "#ff6b350a" : "#ffffff04",
+                transition: "all 0.2s ease", marginBottom: 28,
+              }}
+            >
+              <input ref={fileInputRef} type="file" accept=".mp4,.mov,.webm,.avi" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+              {file ? (
+                <div>
+                  <div style={{ width: 48, height: 48, background: "#ff6b3520", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", color: "#ff6b35" }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <rect x="2" y="2" width="20" height="20" rx="4"/>
+                      <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+                    </svg>
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>{file.name}</div>
+                  <div style={{ fontSize: 13, color: "#ffffff40" }}>{(file.size / 1024 / 1024).toFixed(1)} MB · Click to change</div>
                 </div>
-                <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>{file.name}</div>
-                <div style={{ fontSize: 13, color: "#ffffff40" }}>{(file.size / 1024 / 1024).toFixed(1)} MB · Click to change</div>
-              </div>
-            ) : (
-              <div>
-                <div style={{ color: "#ffffff30", marginBottom: 12 }}><UploadIcon /></div>
-                <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>Drop your screencast here</div>
-                <div style={{ fontSize: 13, color: "#ffffff40" }}>MP4, MOV, WebM, AVI · up to 200MB</div>
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: "grid", gap: 22, marginBottom: 28 }}>
-
-            {/* Product name */}
-            <div>
-              {label("PRODUCT NAME (optional)")}
-              <input type="text" value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="e.g. Neve, PPOM, Appointly..."
-                style={{ width: "100%", background: "#ffffff08", border: "1px solid #ffffff14", borderRadius: 10, padding: "12px 16px", color: "#e8e6e0", fontSize: 15, transition: "border-color 0.2s" }} />
+              ) : (
+                <div>
+                  <div style={{ color: "#ffffff30", marginBottom: 12 }}><UploadIcon /></div>
+                  <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>Drop your screencast here</div>
+                  <div style={{ fontSize: 13, color: "#ffffff40" }}>MP4, MOV, WebM, AVI · up to 200MB</div>
+                </div>
+              )}
             </div>
 
-            {/* Tone */}
-            <div>
-              {label("VOICEOVER TONE")}
-              <div style={{ display: "flex", gap: 10 }}>
-                {TONES.map((t) => (
-                  <button key={t.value} onClick={() => setTone(t.value)} style={{
-                    flex: 1, padding: "12px 8px", borderRadius: 10,
-                    border: `1.5px solid ${tone === t.value ? "#ff6b35" : "#ffffff14"}`,
-                    background: tone === t.value ? "#ff6b350f" : "#ffffff04",
-                    color: tone === t.value ? "#ff6b35" : "#ffffff60",
-                    cursor: "pointer", fontSize: 13, fontWeight: tone === t.value ? 500 : 400,
-                    transition: "all 0.15s ease", textAlign: "center", fontFamily: "inherit",
+            <div style={{ display: "grid", gap: 22, marginBottom: 28 }}>
+
+              {/* Product name */}
+              <div>
+                {label("PRODUCT NAME (optional)")}
+                <input type="text" value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="e.g. Neve, PPOM, Appointly..."
+                  style={{ width: "100%", background: "#ffffff08", border: "1px solid #ffffff14", borderRadius: 10, padding: "12px 16px", color: "#e8e6e0", fontSize: 15, transition: "border-color 0.2s" }} />
+              </div>
+
+              {/* Script length */}
+              <div>
+                {label("SCRIPT LENGTH")}
+                <div style={{ display: "flex", gap: 10 }}>
+                  {MODES.map((m) => (
+                    <button key={m.value} onClick={() => setWordLimit(m.value)} style={{
+                      flex: 1, padding: "12px 8px", borderRadius: 10,
+                      border: `1.5px solid ${wordLimit === m.value ? "#ff6b35" : "#ffffff14"}`,
+                      background: wordLimit === m.value ? "#ff6b350f" : "#ffffff04",
+                      color: wordLimit === m.value ? "#ff6b35" : "#ffffff60",
+                      cursor: "pointer", fontSize: 13, fontWeight: wordLimit === m.value ? 500 : 400,
+                      transition: "all 0.15s ease", textAlign: "center", fontFamily: "inherit",
+                    }}>
+                      <div style={{ marginBottom: 2 }}>{m.label}</div>
+                      <div style={{ fontSize: 11, opacity: 0.6 }}>{m.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tone */}
+              <div>
+                {label("VOICEOVER TONE")}
+                <div style={{ display: "flex", gap: 10 }}>
+                  {TONES.map((t) => (
+                    <button key={t.value} onClick={() => setTone(t.value)} style={{
+                      flex: 1, padding: "12px 8px", borderRadius: 10,
+                      border: `1.5px solid ${tone === t.value ? "#ff6b35" : "#ffffff14"}`,
+                      background: tone === t.value ? "#ff6b350f" : "#ffffff04",
+                      color: tone === t.value ? "#ff6b35" : "#ffffff60",
+                      cursor: "pointer", fontSize: 13, fontWeight: tone === t.value ? 500 : 400,
+                      transition: "all 0.15s ease", textAlign: "center", fontFamily: "inherit",
+                    }}>
+                      <div style={{ marginBottom: 2 }}>{t.label}</div>
+                      <div style={{ fontSize: 11, opacity: 0.6 }}>{t.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Generate Script button */}
+            <button onClick={handleGenerateScript} disabled={!file || phase === "generatingScript"} style={{
+              width: "100%", padding: "16px", borderRadius: 12, border: "none",
+              background: !file || phase === "generatingScript" ? "#ffffff12" : "#ff6b35",
+              color: !file || phase === "generatingScript" ? "#ffffff30" : "white",
+              fontSize: 16, fontWeight: 500, cursor: !file || phase === "generatingScript" ? "not-allowed" : "pointer",
+              transition: "all 0.2s ease", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+              fontFamily: "inherit",
+            }}>
+              {phase === "generatingScript" ? (
+                <>
+                  <SpinnerIcon />
+                  <span style={{ animation: "pulse 1.5s ease infinite" }}>{step || "Generating script..."}</span>
+                </>
+              ) : "Generate Script →"}
+            </button>
+          </div>
+        )}
+
+        {/* Phase 2: Script review */}
+        {(phase === "scriptReady" || phase === "generatingVideo") && (
+          <div style={{ animation: "fadeUp 0.4s ease both" }}>
+            <div style={{ height: 1, background: "linear-gradient(90deg, #ff6b3540, transparent)", marginBottom: 32 }} />
+
+            <h2 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, fontWeight: 400, marginBottom: 8, letterSpacing: "-0.02em" }}>
+              Review your script
+            </h2>
+            <p style={{ color: "#ffffff40", fontSize: 14, marginBottom: 24 }}>
+              {scriptMeta?.frame_count} frames analysed · {Math.round(scriptMeta?.duration || 0)}s video · Edit segments below, then confirm to generate audio and video.
+            </p>
+
+            <div style={{ background: "#ffffff06", border: "1px solid #ffffff10", borderRadius: 16, padding: 24, marginBottom: 20, opacity: phase === "generatingVideo" ? 0.5 : 1, pointerEvents: phase === "generatingVideo" ? "none" : "auto", transition: "opacity 0.2s" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <span style={{ fontSize: 12, color: "#ffffff50", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                  Voiceover Script · {segments.length} segment{segments.length !== 1 ? "s" : ""}
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{
+                    fontSize: 12,
+                    color: totalWordCount() > wordLimit ? "#ff6b6b" : "#ffffff40",
                   }}>
-                    <div style={{ marginBottom: 2 }}>{t.label}</div>
-                    <div style={{ fontSize: 11, opacity: 0.6 }}>{t.desc}</div>
+                    {totalWordCount()} / {wordLimit} words
+                  </span>
+                  <button onClick={copyScript} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: copied ? "#ff6b3520" : "#ffffff10", border: "none", borderRadius: 8,
+                    padding: "6px 12px", color: copied ? "#ff6b35" : "#ffffff60",
+                    fontSize: 12, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s",
+                  }}>
+                    {copied ? <CheckIcon /> : <CopyIcon />}
+                    {copied ? "Copied!" : "Copy"}
                   </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {segments.map((seg) => (
+                  <div key={seg.index} style={{
+                    display: "flex", alignItems: "flex-start", gap: 12,
+                    padding: "12px 14px", borderRadius: 10,
+                    background: editingSegment === seg.index ? "#ffffff0c" : "#ffffff04",
+                    border: `1px solid ${editingSegment === seg.index ? "#ff6b3530" : "#ffffff08"}`,
+                    transition: "all 0.2s",
+                  }}>
+                    {seg.frame_thumbnail ? (
+                      <img
+                        src={`${API_BASE}${seg.frame_thumbnail}`}
+                        alt={`Frame ${seg.frame_start}`}
+                        style={{
+                          width: 72, height: 44, objectFit: "cover", borderRadius: 6,
+                          border: "1px solid #ffffff10", flexShrink: 0,
+                        }}
+                      />
+                    ) : (
+                      <span style={{
+                        fontSize: 11, color: "#ffffff30", fontWeight: 500,
+                        minWidth: 24, textAlign: "right", paddingTop: 3,
+                      }}>
+                        {seg.index + 1}
+                      </span>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      {editingSegment === seg.index ? (
+                        <>
+                          <textarea
+                            value={editingSegmentText}
+                            onChange={(e) => setEditingSegmentText(e.target.value)}
+                            autoFocus
+                            style={{
+                              width: "100%", minHeight: 60, fontSize: 14, lineHeight: 1.7,
+                              color: "#e8e6e0", background: "#ffffff08", border: "1px solid #ffffff20",
+                              borderRadius: 8, padding: "8px 12px", fontFamily: "inherit", resize: "vertical",
+                              outline: "none",
+                            }}
+                          />
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button
+                              onClick={() => { updateSegmentText(seg.index, editingSegmentText); setEditingSegment(null); }}
+                              style={{
+                                padding: "6px 14px", borderRadius: 6, border: "none",
+                                background: "#ff6b35", color: "white",
+                                fontSize: 12, fontWeight: 500, cursor: "pointer",
+                                fontFamily: "inherit",
+                              }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingSegment(null)}
+                              style={{
+                                padding: "6px 14px", borderRadius: 6, border: "1px solid #ffffff20",
+                                background: "transparent", color: "#ffffff60",
+                                fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            {segments.length > 1 && (
+                              <button
+                                onClick={() => { deleteSegment(seg.index); setEditingSegment(null); }}
+                                style={{
+                                  padding: "6px 14px", borderRadius: 6, border: "1px solid #ff6b6b30",
+                                  background: "transparent", color: "#ff6b6b80",
+                                  fontSize: 12, cursor: "pointer", fontFamily: "inherit", marginLeft: "auto",
+                                }}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: 14, lineHeight: 1.7, color: "#e8e6e0cc", margin: 0 }}>
+                            {seg.text}
+                          </p>
+                          {seg.frame_start != null && seg.frame_end != null && (
+                            <span style={{
+                              fontSize: 11, color: "#ffffff30", marginTop: 4, display: "inline-block",
+                            }}>
+                              Frames {seg.frame_start}–{seg.frame_end} ({seg.frame_end - seg.frame_start + 1}s)
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    {editingSegment !== seg.index && (
+                      <button
+                        onClick={() => { setEditingSegment(seg.index); setEditingSegmentText(seg.text); }}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, border: "1px solid #ffffff14",
+                          background: "#ffffff08", color: "#ffffff50",
+                          fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                          whiteSpace: "nowrap", transition: "all 0.15s", flexShrink: 0,
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
+
+              <button onClick={addSegment} style={{
+                marginTop: 12, padding: "8px 16px", borderRadius: 8,
+                border: "1px dashed #ffffff20", background: "transparent",
+                color: "#ffffff40", fontSize: 12, cursor: "pointer",
+                fontFamily: "inherit", width: "100%", transition: "all 0.15s",
+              }}>
+                + Add Segment
+              </button>
             </div>
 
-            {/* Short clip section */}
-            <div style={{ background: "#ffffff04", border: "1px solid #ffffff0a", borderRadius: 14, padding: 18, textAlign: "left" }}>
+            {/* Short clip options — commented out for now, uncomment to re-enable
+            <div style={{ background: "#ffffff04", border: "1px solid #ffffff0a", borderRadius: 14, padding: 18, marginBottom: 20 }}>
               <Toggle value={generateShort} onChange={setGenerateShort}
                 label="Generate social short clip"
-                desc="Auto-cuts a 10–20s highlight, formatted 9:16 for Instagram, TikTok & Reels" />
+                desc="Auto-cuts a 10-20s highlight, formatted 9:16 for Instagram, TikTok & Reels" />
 
               {generateShort && (
                 <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #ffffff08" }}>
@@ -334,7 +678,7 @@ export default function App() {
                         cursor: "pointer", fontSize: 13, fontFamily: "inherit",
                         transition: "all 0.15s",
                       }}>
-                        {mode === "auto" ? "✦ AI picks the best moment" : "✎ I'll mark the moment"}
+                        {mode === "auto" ? "AI picks the best moment" : "I'll mark the moment"}
                       </button>
                     ))}
                   </div>
@@ -356,35 +700,46 @@ export default function App() {
                 </div>
               )}
             </div>
-          </div>
+            */}
 
-          {/* Submit */}
-          <button onClick={handleSubmit} disabled={!file || loading} style={{
-            width: "100%", padding: "16px", borderRadius: 12, border: "none",
-            background: !file || loading ? "#ffffff12" : "#ff6b35",
-            color: !file || loading ? "#ffffff30" : "white",
-            fontSize: 16, fontWeight: 500, cursor: !file || loading ? "not-allowed" : "pointer",
-            transition: "all 0.2s ease", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-            fontFamily: "inherit",
-          }}>
-            {loading ? (
-              <>
-                <SpinnerIcon />
-                <span style={{ animation: "pulse 1.5s ease infinite" }}>{step || "Processing..."}</span>
-              </>
-            ) : "Generate Demo →"}
-          </button>
-        </div>
+            {/* Action buttons */}
+            <div style={{ display: "flex", gap: 12 }}>
+              <button onClick={handleConfirmAndGenerate} disabled={phase === "generatingVideo"} style={{
+                flex: 1, padding: "16px", borderRadius: 12, border: "none",
+                background: phase === "generatingVideo" ? "#ffffff12" : "#ff6b35",
+                color: phase === "generatingVideo" ? "#ffffff30" : "white",
+                fontSize: 16, fontWeight: 500, cursor: phase === "generatingVideo" ? "not-allowed" : "pointer",
+                transition: "all 0.2s ease", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                fontFamily: "inherit",
+              }}>
+                {phase === "generatingVideo" ? (
+                  <>
+                    <SpinnerIcon />
+                    <span style={{ animation: "pulse 1.5s ease infinite" }}>{step || "Generating..."}</span>
+                  </>
+                ) : "Confirm & Generate Video →"}
+              </button>
+              <button onClick={handleCancel} disabled={phase === "generatingVideo"} style={{
+                padding: "16px 24px", borderRadius: 12, border: "1px solid #ffffff20",
+                background: "transparent", color: "#ffffff60",
+                fontSize: 16, cursor: phase === "generatingVideo" ? "not-allowed" : "pointer",
+                fontFamily: "inherit", transition: "all 0.2s",
+              }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Error */}
         {error && (
           <div style={{ marginTop: 24, padding: "16px 20px", borderRadius: 12, background: "#ff000010", border: "1px solid #ff000030", color: "#ff6b6b", fontSize: 14, animation: "fadeUp 0.3s ease both" }}>
-            ⚠️ {error}
+            {error}
           </div>
         )}
 
         {/* Results */}
-        {result && (
+        {phase === "result" && result && (
           <div style={{ marginTop: 48, animation: "fadeUp 0.4s ease both" }}>
             <div style={{ height: 1, background: "linear-gradient(90deg, #ff6b3540, transparent)", marginBottom: 40 }} />
 
@@ -405,21 +760,21 @@ export default function App() {
               )}
             </p>
 
-            {/* Script */}
+            {/* Script segments */}
             <div style={{ background: "#ffffff06", border: "1px solid #ffffff10", borderRadius: 16, padding: 24, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <span style={{ fontSize: 12, color: "#ffffff50", letterSpacing: "0.08em", textTransform: "uppercase" }}>Voiceover Script</span>
+                <span style={{ fontSize: 12, color: "#ffffff50", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                  Voiceover Script · {segments.length} segment{segments.length !== 1 ? "s" : ""}
+                </span>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {!editingScript && (
-                    <button onClick={startEditing} style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      background: "#ffffff10", border: "none", borderRadius: 8,
-                      padding: "6px 12px", color: "#ffffff60",
-                      fontSize: 12, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s",
-                    }}>
-                      ✎ Edit
-                    </button>
-                  )}
+                  <button onClick={() => setResult((prev) => ({ ...prev, _editing: true, _editedScript: prev.script }))} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: "#ffffff10", border: "none", borderRadius: 8,
+                    padding: "6px 12px", color: "#ffffff60",
+                    fontSize: 12, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s",
+                  }}>
+                    Re-record All
+                  </button>
                   <button onClick={copyScript} style={{
                     display: "flex", alignItems: "center", gap: 6,
                     background: copied ? "#ff6b3520" : "#ffffff10", border: "none", borderRadius: 8,
@@ -431,11 +786,12 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {editingScript ? (
+
+              {result._editing ? (
                 <>
                   <textarea
-                    value={editedScript}
-                    onChange={(e) => setEditedScript(e.target.value)}
+                    value={result._editedScript}
+                    onChange={(e) => setResult((prev) => ({ ...prev, _editedScript: e.target.value }))}
                     style={{
                       width: "100%", minHeight: 180, fontSize: 16, lineHeight: 1.8,
                       color: "#e8e6e0", background: "#ffffff08", border: "1px solid #ffffff20",
@@ -451,9 +807,9 @@ export default function App() {
                       fontSize: 13, fontWeight: 500, cursor: regenerating ? "not-allowed" : "pointer",
                       fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8,
                     }}>
-                      {regenerating ? <><SpinnerIcon /> Regenerating...</> : "Regenerate Audio & Video"}
+                      {regenerating ? <><SpinnerIcon /> Re-recording all...</> : "Re-record All Segments"}
                     </button>
-                    <button onClick={() => setEditingScript(false)} style={{
+                    <button onClick={() => setResult((prev) => ({ ...prev, _editing: false }))} style={{
                       padding: "10px 20px", borderRadius: 8, border: "1px solid #ffffff20",
                       background: "transparent", color: "#ffffff60",
                       fontSize: 13, cursor: "pointer", fontFamily: "inherit",
@@ -463,7 +819,105 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                <p style={{ fontSize: 16, lineHeight: 1.8, color: "#e8e6e0cc", whiteSpace: "pre-wrap" }}>{result.script}</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {segments.map((seg) => (
+                    <div key={seg.index} style={{
+                      display: "flex", alignItems: "flex-start", gap: 12,
+                      padding: "12px 14px", borderRadius: 10,
+                      background: editingSegment === seg.index ? "#ffffff0c" : "#ffffff04",
+                      border: `1px solid ${editingSegment === seg.index ? "#ff6b3530" : "#ffffff08"}`,
+                      transition: "all 0.2s",
+                    }}>
+                      {seg.frame_thumbnail ? (
+                        <img
+                          src={`${API_BASE}${seg.frame_thumbnail}`}
+                          alt={`Frame ${seg.frame_start}`}
+                          style={{
+                            width: 72, height: 44, objectFit: "cover", borderRadius: 6,
+                            border: "1px solid #ffffff10", flexShrink: 0,
+                          }}
+                        />
+                      ) : (
+                        <span style={{
+                          fontSize: 11, color: "#ffffff30", fontWeight: 500,
+                          minWidth: 24, textAlign: "right", paddingTop: 3,
+                        }}>
+                          {seg.index + 1}
+                        </span>
+                      )}
+                      <div style={{ flex: 1 }}>
+                        {editingSegment === seg.index ? (
+                          <>
+                            <textarea
+                              value={editingSegmentText}
+                              onChange={(e) => setEditingSegmentText(e.target.value)}
+                              disabled={regeneratingSegment === seg.index}
+                              style={{
+                                width: "100%", minHeight: 60, fontSize: 14, lineHeight: 1.7,
+                                color: "#e8e6e0", background: "#ffffff08", border: "1px solid #ffffff20",
+                                borderRadius: 8, padding: "8px 12px", fontFamily: "inherit", resize: "vertical",
+                                outline: "none", opacity: regeneratingSegment === seg.index ? 0.5 : 1,
+                              }}
+                            />
+                            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                              <button
+                                onClick={() => regenerateSegment(seg.index, editingSegmentText)}
+                                disabled={regeneratingSegment === seg.index}
+                                style={{
+                                  padding: "6px 14px", borderRadius: 6, border: "none",
+                                  background: regeneratingSegment === seg.index ? "#ffffff12" : "#ff6b35",
+                                  color: regeneratingSegment === seg.index ? "#ffffff30" : "white",
+                                  fontSize: 12, fontWeight: 500,
+                                  cursor: regeneratingSegment === seg.index ? "not-allowed" : "pointer",
+                                  fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
+                                }}
+                              >
+                                {regeneratingSegment === seg.index ? <><SpinnerIcon /> Re-recording...</> : "Save & Re-record"}
+                              </button>
+                              <button
+                                onClick={() => setEditingSegment(null)}
+                                disabled={regeneratingSegment === seg.index}
+                                style={{
+                                  padding: "6px 14px", borderRadius: 6, border: "1px solid #ffffff20",
+                                  background: "transparent", color: "#ffffff60",
+                                  fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p style={{ fontSize: 14, lineHeight: 1.7, color: "#e8e6e0cc", margin: 0 }}>
+                              {seg.text}
+                            </p>
+                            {seg.frame_start != null && seg.frame_end != null && (
+                              <span style={{
+                                fontSize: 11, color: "#ffffff30", marginTop: 4, display: "inline-block",
+                              }}>
+                                Frames {seg.frame_start}–{seg.frame_end} ({seg.frame_end - seg.frame_start + 1}s)
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                      {editingSegment !== seg.index && (
+                        <button
+                          onClick={() => { setEditingSegment(seg.index); setEditingSegmentText(seg.text); }}
+                          style={{
+                            padding: "4px 10px", borderRadius: 6, border: "1px solid #ffffff14",
+                            background: "#ffffff08", color: "#ffffff50",
+                            fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                            whiteSpace: "nowrap", transition: "all 0.15s", flexShrink: 0,
+                          }}
+                        >
+                          Re-record
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -476,7 +930,7 @@ export default function App() {
               </VideoCard>
             )}
 
-            {/* Social short */}
+            {/* Social short — commented out for now, uncomment to re-enable
             {result.short_clip_url && (
               <VideoCard
                 title="Social Short Clip"
@@ -492,6 +946,7 @@ export default function App() {
                 </div>
               </VideoCard>
             )}
+            */}
 
             {/* Audio download */}
             {result.audio_url && (
@@ -502,6 +957,16 @@ export default function App() {
                 </a>
               </div>
             )}
+
+            {/* Start over */}
+            <button onClick={handleCancel} style={{
+              marginTop: 24, width: "100%", padding: "14px", borderRadius: 12,
+              border: "1px solid #ffffff15", background: "transparent",
+              color: "#ffffff50", fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+              transition: "all 0.2s",
+            }}>
+              Start New Demo
+            </button>
           </div>
         )}
       </div>
