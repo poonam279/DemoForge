@@ -499,14 +499,16 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path):
         speed_factor = max(0.25, min(4.0, audio_dur / vid_duration))
 
         part_path = os.path.join(temp_dir, f"part_{i:03d}.mp4")
+        vf = (
+            f"[0:v]trim=start={vid_start}:end={vid_end},"
+            f"setpts=PTS-STARTPTS,"
+            f"setpts={speed_factor}*PTS[v]"
+        )
         cmd = [
             "ffmpeg",
-            "-ss", str(vid_start),
-            "-t", str(vid_duration),
             "-i", video_path,
             "-i", seg["audio_path"],
-            "-filter_complex",
-            f"[0:v]setpts={speed_factor}*PTS[v]",
+            "-filter_complex", vf,
             "-map", "[v]", "-map", "1:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-c:a", "aac", "-shortest",
@@ -692,7 +694,16 @@ def build_enhancement_filter_complex(interactions, scene_changes, width, height,
 def merge_audio_with_video(video_path, audio_path, output_path,
                            filter_complex=None, circle_path=None):
     """Merge voiceover into the full video, optionally applying enhancement filters."""
-    cmd = ["ffmpeg", "-i", video_path, "-i", audio_path]
+    vid_dur = get_video_duration(video_path)
+    aud_dur = get_audio_duration(audio_path)
+    audio_longer = aud_dur > vid_dur + 0.5
+
+    cmd = ["ffmpeg"]
+
+    if audio_longer and not filter_complex:
+        cmd += ["-stream_loop", "-1"]
+
+    cmd += ["-i", video_path, "-i", audio_path]
 
     if circle_path:
         cmd += ["-loop", "1", "-i", circle_path]
@@ -701,6 +712,9 @@ def merge_audio_with_video(video_path, audio_path, output_path,
         cmd += ["-filter_complex", filter_complex]
         cmd += ["-map", "[out]", "-map", "1:a"]
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+    elif audio_longer:
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
     else:
         cmd += ["-c:v", "copy"]
         cmd += ["-map", "0:v:0", "-map", "1:a:0"]
