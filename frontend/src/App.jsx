@@ -934,7 +934,7 @@ export default function App() {
             {/* Full demo video */}
             {result.full_video_url && (
               <VideoCard title="Full Narrated Demo" badge="Full Length" badgeColor="#ff6b35" url={result.full_video_url}>
-                <a href={`${API_BASE}${result.full_video_url}`} download style={{ display: "inline-block", marginTop: 12, fontSize: 13, color: "#ff6b35", textDecoration: "none" }}>
+                <a href={`${API_BASE}${result.full_video_url}${result.full_video_url.includes("?") ? "&" : "?"}download=1`} download style={{ display: "inline-block", marginTop: 12, fontSize: 13, color: "#ff6b35", textDecoration: "none" }}>
                   ↓ Download MP4
                 </a>
               </VideoCard>
@@ -950,7 +950,7 @@ export default function App() {
                 highlight={result.highlight}
               >
                 <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-                  <a href={`${API_BASE}${result.short_clip_url}`} download style={{ fontSize: 13, color: "#a855f7", textDecoration: "none" }}>
+                  <a href={`${API_BASE}${result.short_clip_url}${result.short_clip_url.includes("?") ? "&" : "?"}download=1`} download style={{ fontSize: 13, color: "#a855f7", textDecoration: "none" }}>
                     ↓ Download Short (9:16)
                   </a>
                 </div>
@@ -962,7 +962,7 @@ export default function App() {
             {result.audio_url && (
               <div style={{ background: "#ffffff04", border: "1px solid #ffffff08", borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 13, color: "#ffffff40" }}>Voiceover audio only</span>
-                <a href={`${API_BASE}${result.audio_url}`} download style={{ fontSize: 13, color: "#ffffff50", textDecoration: "none" }}>
+                <a href={`${API_BASE}${result.audio_url}${result.audio_url.includes("?") ? "&" : "?"}download=1`} download style={{ fontSize: 13, color: "#ffffff50", textDecoration: "none" }}>
                   ↓ Download MP3
                 </a>
               </div>

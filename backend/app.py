@@ -497,7 +497,7 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path,
         "ffmpeg",
         "-i", video_path,
         "-i", stitched_audio,
-        "-vf", f"setpts={speed_factor}*PTS,fps=30",
+        "-vf", f"setpts={speed_factor}*PTS,fps=30,scale='min(1920,iw)':-2",
         "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-shortest",
@@ -679,7 +679,7 @@ def merge_audio_with_video(video_path, audio_path, output_path,
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     elif audio_longer:
         extra = aud_dur - vid_dur + 1
-        cmd += ["-vf", f"tpad=stop_mode=clone:stop_duration={extra:.1f}"]
+        cmd += ["-vf", f"tpad=stop_mode=clone:stop_duration={extra:.1f},scale='min(1920,iw)':-2"]
         cmd += ["-map", "0:v:0", "-map", "1:a:0"]
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
     else:
@@ -1241,6 +1241,8 @@ def regenerate_from_script():
 
 @app.route("/outputs/<path:filename>")
 def serve_output(filename):
+    if request.args.get("download"):
+        return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
     return send_from_directory(OUTPUT_FOLDER, filename)
 
 
