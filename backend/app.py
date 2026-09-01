@@ -720,6 +720,7 @@ def merge_audio_with_video(video_path, audio_path, output_path,
     cmd += ["-c:a", "aac", "-shortest", output_path, "-y"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
+        print(f"Merge ffmpeg error: {result.stderr[-500:]}")
         raise Exception("Failed to merge video and audio.")
     return output_path
 
@@ -1289,6 +1290,21 @@ def cleanup_endpoint(job_id):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "tts_provider": TTS_PROVIDER or "not yet resolved"})
+
+
+@app.route("/api/debug/ffmpeg")
+def ffmpeg_debug():
+    ver = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    enc = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
+    flt = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True)
+    return jsonify({
+        "version": ver.stdout.split("\n")[0],
+        "has_libx264": "libx264" in enc.stdout,
+        "has_tpad": "tpad" in flt.stdout,
+        "has_trim": "trim" in flt.stdout,
+        "has_setpts": "setpts" in flt.stdout,
+        "has_concat": "concat" in flt.stdout,
+    })
 
 
 @app.route("/", defaults={"path": ""})
