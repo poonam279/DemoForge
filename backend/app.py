@@ -478,66 +478,35 @@ def stitch_segment_audio(segment_paths, output_path):
     return output_path
 
 
-def assemble_synced_video(video_path, segment_data, job_dir, output_path):
-    """Assemble video with narration synchronized to frame ranges.
+def assemble_synced_video(video_path, segment_data, job_dir, output_path,
+                          stitched_audio=None):
+    """Slow the video uniformly to match total narration duration, then merge."""
+    total_audio = sum(s["audio_duration"] for s in segment_data)
+    vid_dur = get_video_duration(video_path)
 
-    segment_data: list of dicts with text, frame_start, frame_end, audio_path, audio_duration.
-    """
-    temp_dir = os.path.join(job_dir, "sync_parts")
-    os.makedirs(temp_dir, exist_ok=True)
-    part_paths = []
+    if total_audio <= 0 or vid_dur <= 0:
+        raise Exception("Invalid audio or video duration")
 
-    for i, seg in enumerate(segment_data):
-        vid_start = seg["frame_start"] - 1
-        vid_end = seg["frame_end"]
-        vid_duration = vid_end - vid_start
-        audio_dur = seg["audio_duration"]
+    speed_factor = max(0.25, min(4.0, total_audio / vid_dur))
 
-        if vid_duration <= 0 or audio_dur <= 0:
-            continue
-
-        speed_factor = max(0.25, min(4.0, audio_dur / vid_duration))
-
-        part_path = os.path.join(temp_dir, f"part_{i:03d}.mp4")
-        vf = (
-            f"[0:v]trim=start={vid_start}:end={vid_end},"
-            f"setpts=PTS-STARTPTS,"
-            f"setpts={speed_factor}*PTS[v]"
-        )
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-i", seg["audio_path"],
-            "-filter_complex", vf,
-            "-map", "[v]", "-map", "1:a",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-c:a", "aac", "-shortest",
-            part_path, "-y"
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Segment {i} ffmpeg error: {result.stderr[-500:]}")
-            raise Exception(f"Failed to sync video segment {i}.")
-        part_paths.append(part_path)
-
-    if not part_paths:
-        raise Exception("No synchronized segments produced")
-
-    concat_list = os.path.join(temp_dir, "concat.txt")
-    with open(concat_list, "w") as f:
-        for p in part_paths:
-            f.write(f"file '{os.path.abspath(p)}'\n")
+    if not stitched_audio:
+        stitched_audio = os.path.join(job_dir, "synced_full.mp3")
+        stitch_segment_audio([s["audio_path"] for s in segment_data], stitched_audio)
 
     cmd = [
-        "ffmpeg", "-f", "concat", "-safe", "0",
-        "-i", concat_list, "-c", "copy",
+        "ffmpeg",
+        "-i", video_path,
+        "-i", stitched_audio,
+        "-vf", f"setpts={speed_factor}*PTS",
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:a", "aac", "-shortest",
         output_path, "-y"
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception("Failed to concatenate final video.")
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
+        app.logger.error(f"Synced video ffmpeg error: {result.stderr[-500:]}")
+        raise Exception("Failed to assemble synced video.")
     return output_path
 
 
@@ -995,7 +964,8 @@ def process_screencast():
         full_video_path = os.path.join(OUTPUT_FOLDER, f"{job_id}_demo.mp4")
         if segment_data:
             try:
-                assemble_synced_video(video_path, segment_data, job_dir, full_video_path)
+                assemble_synced_video(video_path, segment_data, job_dir,
+                                     full_video_path, stitched_audio=audio_path)
                 enhancements_applied = False
             except Exception as e:
                 app.logger.error(f"Synced assembly failed, falling back to merge: {e}")
@@ -1129,7 +1099,8 @@ def regenerate_segment():
                     "audio_duration": get_audio_duration(seg_audio),
                 })
             try:
-                assemble_synced_video(video_path, segment_data, job_dir, full_video_path)
+                assemble_synced_video(video_path, segment_data, job_dir,
+                                     full_video_path, stitched_audio=audio_path)
             except Exception as e:
                 app.logger.error(f"Synced re-assembly failed, falling back: {e}")
                 merge_audio_with_video(video_path, audio_path, full_video_path)
