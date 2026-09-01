@@ -516,6 +516,7 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path):
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            print(f"Segment {i} ffmpeg error: {result.stderr[-500:]}")
             raise Exception(f"Failed to sync video segment {i}.")
         part_paths.append(part_path)
 
@@ -698,12 +699,7 @@ def merge_audio_with_video(video_path, audio_path, output_path,
     aud_dur = get_audio_duration(audio_path)
     audio_longer = aud_dur > vid_dur + 0.5
 
-    cmd = ["ffmpeg"]
-
-    if audio_longer and not filter_complex:
-        cmd += ["-stream_loop", "-1"]
-
-    cmd += ["-i", video_path, "-i", audio_path]
+    cmd = ["ffmpeg", "-i", video_path, "-i", audio_path]
 
     if circle_path:
         cmd += ["-loop", "1", "-i", circle_path]
@@ -713,6 +709,8 @@ def merge_audio_with_video(video_path, audio_path, output_path,
         cmd += ["-map", "[out]", "-map", "1:a"]
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     elif audio_longer:
+        extra = aud_dur - vid_dur + 1
+        cmd += ["-vf", f"tpad=stop_mode=clone:stop_duration={extra:.1f}"]
         cmd += ["-map", "0:v:0", "-map", "1:a:0"]
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
     else:
