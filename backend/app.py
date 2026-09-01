@@ -497,9 +497,10 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path,
         "ffmpeg",
         "-i", video_path,
         "-i", stitched_audio,
-        "-vf", f"setpts={speed_factor}*PTS,fps=30,scale='min(1920,iw)':-2",
+        "-vf", f"setpts={speed_factor}*PTS,fps=30,scale='min(1280,iw)':-2",
         "-map", "0:v", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+        "-threads", "2",
         "-c:a", "aac", "-shortest",
         output_path, "-y"
     ]
@@ -676,12 +677,12 @@ def merge_audio_with_video(video_path, audio_path, output_path,
     if filter_complex:
         cmd += ["-filter_complex", filter_complex]
         cmd += ["-map", "[out]", "-map", "1:a"]
-        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-threads", "2"]
     elif audio_longer:
         extra = aud_dur - vid_dur + 1
-        cmd += ["-vf", f"tpad=stop_mode=clone:stop_duration={extra:.1f},scale='min(1920,iw)':-2"]
+        cmd += ["-vf", f"tpad=stop_mode=clone:stop_duration={extra:.1f},scale='min(1280,iw)':-2"]
         cmd += ["-map", "0:v:0", "-map", "1:a:0"]
-        cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20"]
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-threads", "2"]
     else:
         cmd += ["-c:v", "copy"]
         cmd += ["-map", "0:v:0", "-map", "1:a:0"]
