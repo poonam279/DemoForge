@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "nodejs_22", "ffmpeg"]
+nixPkgs = ["python311", "python311Packages.pip", "nodejs-22_x", "ffmpeg"]
 
 [phases.install]
 cmds = [
