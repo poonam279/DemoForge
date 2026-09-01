@@ -63,14 +63,14 @@ def extract_frames(video_path, output_dir, fps=1):
     os.makedirs(output_dir, exist_ok=True)
     cmd = [
         "ffmpeg", "-i", video_path,
-        "-vf", f"fps={fps}",
-        "-q:v", "2",
+        "-vf", f"fps={fps},scale='min(1280,iw)':-2",
+        "-q:v", "4",
         f"{output_dir}/frame_%04d.jpg",
         "-y"
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"ffmpeg error: {result.stderr}")
+        raise Exception("Failed to extract frames from video. The file may be corrupted or too large.")
     frames = sorted([f for f in os.listdir(output_dir) if f.endswith(".jpg")])
     return [os.path.join(output_dir, f) for f in frames]
 
@@ -428,7 +428,7 @@ def stitch_segment_audio(segment_paths, output_path):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"ffmpeg concat error: {result.stderr}")
+        raise Exception("Failed to concatenate video segments.")
     return output_path
 
 
@@ -468,7 +468,7 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path):
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise Exception(f"Segment {i} sync failed: {result.stderr}")
+            raise Exception(f"Failed to sync video segment {i}.")
         part_paths.append(part_path)
 
     if not part_paths:
@@ -486,7 +486,7 @@ def assemble_synced_video(video_path, segment_data, job_dir, output_path):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"Concat failed: {result.stderr}")
+        raise Exception("Failed to concatenate final video.")
 
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
@@ -511,7 +511,7 @@ def ensure_circle_overlay():
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"Circle overlay generation failed: {result.stderr}")
+        raise Exception("Failed to generate circle overlay.")
     return CIRCLE_OVERLAY_PATH
 
 
@@ -662,7 +662,7 @@ def merge_audio_with_video(video_path, audio_path, output_path,
     cmd += ["-c:a", "aac", "-shortest", output_path, "-y"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"ffmpeg merge error: {result.stderr}")
+        raise Exception("Failed to merge video and audio.")
     return output_path
 
 
@@ -732,7 +732,7 @@ def generate_short_clip(video_path, audio_path, start_time, end_time, output_pat
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"ffmpeg short clip error: {result.stderr}")
+        raise Exception("Failed to create video clip.")
     return output_path
 
 
