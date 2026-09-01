@@ -259,6 +259,9 @@ export default function App() {
   };
 
   const handleCancel = () => {
+    if (jobId) {
+      fetch(`${API_BASE}/api/cleanup/${jobId}`, { method: "POST" }).catch(() => {});
+    }
     setPhase("idle");
     setJobId(null);
     setScript("");

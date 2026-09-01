@@ -17,6 +17,8 @@ import time
 import re
 import shutil
 import pathlib
+import glob
+import threading
 
 _base_dir = pathlib.Path(__file__).resolve().parent.parent
 _frontend_dist = _base_dir / "frontend" / "dist"
@@ -40,6 +42,50 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+JOB_MAX_AGE_SECONDS = 30 * 60  # 30 minutes
+
+
+def cleanup_job(job_id):
+    """Delete all files associated with a job."""
+    for pattern in [
+        os.path.join(UPLOAD_FOLDER, f"{job_id}_*"),
+        os.path.join(OUTPUT_FOLDER, f"{job_id}_*"),
+        os.path.join(OUTPUT_FOLDER, job_id),
+    ]:
+        for path in glob.glob(pattern):
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+
+
+def cleanup_expired_jobs():
+    """Delete jobs older than JOB_MAX_AGE_SECONDS. Runs periodically in background."""
+    now = time.time()
+    seen_jobs = set()
+    for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
+        if not os.path.exists(folder):
+            continue
+        for entry in os.listdir(folder):
+            path = os.path.join(folder, entry)
+            if os.stat(path).st_mtime < now - JOB_MAX_AGE_SECONDS:
+                job_id = entry.split("_")[0]
+                if len(job_id) == 8 and job_id not in seen_jobs:
+                    seen_jobs.add(job_id)
+                    cleanup_job(job_id)
+
+
+def _run_cleanup_loop():
+    while True:
+        time.sleep(600)  # every 10 minutes
+        try:
+            cleanup_expired_jobs()
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
+
+threading.Thread(target=_run_cleanup_loop, daemon=True).start()
 
 
 def get_tts_provider():
@@ -1217,6 +1263,15 @@ def serve_output(filename):
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+@app.route("/api/cleanup/<job_id>", methods=["POST"])
+def cleanup_endpoint(job_id):
+    """Delete all files for a job after the user has downloaded the result."""
+    if not job_id or len(job_id) != 8:
+        return jsonify({"error": "Invalid job ID"}), 400
+    cleanup_job(job_id)
+    return jsonify({"status": "cleaned", "job_id": job_id})
 
 
 @app.route("/health")
